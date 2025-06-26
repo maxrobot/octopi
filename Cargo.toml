@@ -1,0 +1,8 @@
+[package]
+edition = "2021"
+name    = "octopi"
+version = "0.1.0"
+
+[dependencies]
+rust_decimal = "1.37.2"
+thiserror    = "2.0.10"
