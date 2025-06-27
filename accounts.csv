@@ -1,0 +1,3 @@
+Processing transactions from: ./data/transactions.csv
+Client: 2, Available: 100.0000, Held: 0, Total: 100.0000, Locked: false
+Client: 1, Available: 150, Held: 0, Total: 150, Locked: false

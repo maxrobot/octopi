@@ -5,6 +5,7 @@ use crate::error::EngineError;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::io::Write;
+use std::str::FromStr;
 
 pub struct Engine {
     accounts: HashMap<u16, Account>,
@@ -26,11 +27,7 @@ impl Engine {
             .entry(tx.client)
             .or_insert(Account::new(tx.client));
 
-        if self.transactions.contains_key(&tx.tx_id) {
-            return Err(EngineError::InvalidTransaction {
-                message: "Transaction already exists".to_string(),
-            });
-        }
+        let tx_already_exists = self.transactions.contains_key(&tx.tx_id);
 
         if !entry.is_available() {
             return Err(EngineError::AccountLocked(tx.client));
@@ -38,56 +35,74 @@ impl Engine {
 
         match tx.kind {
             TransactionType::Deposit => {
-                let amount = tx.amount.ok_or(EngineError::InvalidTransaction {
+                if tx_already_exists {
+                    return Err(EngineError::InvalidTransaction {
+                        message: "Transaction already exists".to_string(),
+                    });
+                }
+                let amount = tx.amount.ok_or_else(|| EngineError::InvalidTransaction {
                     message: "Deposit must have an amount".to_string(),
                 })?;
-                deposit(entry, amount)?
+                deposit(entry, amount)?;
+                self.transactions.insert(tx.tx_id, tx);
             }
             TransactionType::Withdrawal => {
-                let amount = tx.amount.ok_or(EngineError::InvalidTransaction {
+                if tx_already_exists {
+                    return Err(EngineError::InvalidTransaction {
+                        message: "Transaction already exists".to_string(),
+                    });
+                }
+                let amount = tx.amount.ok_or_else(|| EngineError::InvalidTransaction {
                     message: "Withdrawal must have an amount".to_string(),
                 })?;
-                withdraw(entry, amount)?
+                withdraw(entry, amount)?;
+                self.transactions.insert(tx.tx_id, tx);
             }
-            TransactionType::Dispute { referenced_tx_id } => {
-                let disputed_tx = self.transactions.get(&referenced_tx_id).ok_or(
+            TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => {
+                let original = self.transactions.get(&tx.tx_id).ok_or_else(|| {
                     EngineError::InvalidTransaction {
-                        message: "Transaction not found".to_string(),
-                    },
-                )?;
+                        message: "Referenced transaction does not exist".to_string(),
+                    }
+                })?;
 
-                dispute(entry, disputed_tx)?
-            }
-            TransactionType::Resolve { referenced_tx_id } => {
-                let disputed_tx = self.transactions.get(&referenced_tx_id).ok_or(
-                    EngineError::InvalidTransaction {
-                        message: "Transaction not found".to_string(),
-                    },
-                )?;
+                if original.client != tx.client {
+                    return Err(EngineError::InvalidTransaction {
+                        message: "Referenced transaction does not belong to the same client"
+                            .to_string(),
+                    });
+                }
 
-                resolve(entry, disputed_tx)?
-            }
-            TransactionType::Chargeback { referenced_tx_id } => {
-                let disputed_tx = self.transactions.get(&referenced_tx_id).ok_or(
-                    EngineError::InvalidTransaction {
-                        message: "Transaction not found".to_string(),
-                    },
-                )?;
-                chargeback(entry, disputed_tx)?
-            }
-        };
+                if original.kind == TransactionType::Withdrawal {
+                    return Err(EngineError::InvalidTransaction {
+                        message: "Withdrawal cannot be disputed".to_string(),
+                    });
+                }
 
-        self.transactions.insert(tx.tx_id, tx);
+                match tx.kind {
+                    TransactionType::Dispute => dispute(entry, original)?,
+                    TransactionType::Resolve => resolve(entry, original)?,
+                    TransactionType::Chargeback => chargeback(entry, original)?,
+                    _ => unreachable!(),
+                }
+            }
+        }
 
         Ok(())
     }
 
     pub fn dump_accounts<W: Write>(&self, mut writer: W) {
+        // Print CSV header
+        writeln!(&mut writer, "client,available,held,total,locked").unwrap();
+
         for (client, account) in self.accounts.iter() {
             writeln!(
                 &mut writer,
-                "Client: {}, Available: {}, Held: {}, Total: {}, Locked: {}",
-                client, account.available, account.held, account.total, account.locked
+                "{},{},{},{},{}",
+                client,
+                account.available.round_dp(4),
+                account.held.round_dp(4),
+                account.total.round_dp(4),
+                account.locked
             )
             .unwrap();
         }
@@ -122,14 +137,12 @@ pub fn withdraw(account: &mut Account, amount: Decimal) -> Result<(), EngineErro
 }
 
 pub fn dispute(account: &mut Account, tx: &Transaction) -> Result<(), EngineError> {
-    let amount = tx.amount.ok_or(EngineError::InvalidTransaction {
+    let mut amount = tx.amount.ok_or(EngineError::InvalidTransaction {
         message: "Transaction has no amount".to_string(),
     })?;
 
     if account.available < amount {
-        return Err(EngineError::InvalidTransaction {
-            message: "Insufficient funds".to_string(),
-        });
+        amount = account.available;
     }
 
     account.held += amount;
@@ -139,9 +152,13 @@ pub fn dispute(account: &mut Account, tx: &Transaction) -> Result<(), EngineErro
 }
 
 pub fn resolve(account: &mut Account, tx: &Transaction) -> Result<(), EngineError> {
-    let amount = tx.amount.ok_or(EngineError::InvalidTransaction {
+    let mut amount = tx.amount.ok_or(EngineError::InvalidTransaction {
         message: "Transaction has no amount".to_string(),
     })?;
+
+    if account.held < amount {
+        amount = account.held;
+    }
 
     account.held -= amount;
     account.available += amount;
@@ -150,9 +167,13 @@ pub fn resolve(account: &mut Account, tx: &Transaction) -> Result<(), EngineErro
 }
 
 pub fn chargeback(account: &mut Account, tx: &Transaction) -> Result<(), EngineError> {
-    let amount = tx.amount.ok_or(EngineError::InvalidTransaction {
+    let mut amount = tx.amount.ok_or(EngineError::InvalidTransaction {
         message: "Transaction has no amount".to_string(),
     })?;
+
+    if account.held < amount {
+        amount = account.held;
+    }
 
     account.held -= amount;
     account.total -= amount;
@@ -235,7 +256,7 @@ mod tests {
             assert!(engine.apply_transaction(deposit_tx).is_ok());
 
             // Then dispute the transaction
-            let dispute_tx = Transaction::new_dispute(1, 2, 1); // Dispute the first transaction
+            let dispute_tx = Transaction::new_dispute(1, 1); // Dispute the first transaction
 
             assert!(engine.apply_transaction(dispute_tx).is_ok());
 
@@ -254,11 +275,11 @@ mod tests {
             assert!(engine.apply_transaction(deposit_tx).is_ok());
 
             // Then dispute the transaction
-            let dispute_tx = Transaction::new_dispute(1, 2, 1);
+            let dispute_tx = Transaction::new_dispute(1, 1);
             assert!(engine.apply_transaction(dispute_tx).is_ok());
 
             // Then resolve the dispute
-            let resolve_tx = Transaction::new_resolve(1, 3, 1);
+            let resolve_tx = Transaction::new_resolve(1, 1);
 
             assert!(engine.apply_transaction(resolve_tx).is_ok());
 
@@ -277,11 +298,11 @@ mod tests {
             assert!(engine.apply_transaction(deposit_tx).is_ok());
 
             // Then dispute the transaction
-            let dispute_tx = Transaction::new_dispute(1, 2, 1);
+            let dispute_tx = Transaction::new_dispute(1, 1);
             assert!(engine.apply_transaction(dispute_tx).is_ok());
 
             // Then chargeback
-            let chargeback_tx = Transaction::new_chargeback(1, 3, 1);
+            let chargeback_tx = Transaction::new_chargeback(1, 1);
 
             assert!(engine.apply_transaction(chargeback_tx).is_ok());
 
@@ -318,10 +339,10 @@ mod tests {
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(100));
             assert!(engine.apply_transaction(deposit_tx).is_ok());
 
-            let dispute_tx = Transaction::new_dispute(1, 2, 1);
+            let dispute_tx = Transaction::new_dispute(1, 1);
             assert!(engine.apply_transaction(dispute_tx).is_ok());
 
-            let chargeback_tx = Transaction::new_chargeback(1, 3, 1);
+            let chargeback_tx = Transaction::new_chargeback(1, 1);
             assert!(engine.apply_transaction(chargeback_tx).is_ok());
 
             // Try to apply another transaction to locked account
@@ -341,13 +362,13 @@ mod tests {
         fn test_dispute_nonexistent_transaction() {
             let mut engine = Engine::new();
 
-            let dispute_tx = Transaction::new_dispute(1, 1, 999); // Non-existent transaction
+            let dispute_tx = Transaction::new_dispute(1, 999); // Non-existent transaction
 
             let result = engine.apply_transaction(dispute_tx);
             assert!(result.is_err());
             match result {
                 Err(EngineError::InvalidTransaction { message }) => {
-                    assert_eq!(message, "Transaction not found");
+                    assert_eq!(message, "Referenced transaction does not exist");
                 }
                 _ => panic!("Expected InvalidTransaction error"),
             }
@@ -357,13 +378,13 @@ mod tests {
         fn test_resolve_nonexistent_transaction() {
             let mut engine = Engine::new();
 
-            let resolve_tx = Transaction::new_resolve(1, 1, 999); // Non-existent transaction
+            let resolve_tx = Transaction::new_resolve(1, 999); // Non-existent transaction
 
             let result = engine.apply_transaction(resolve_tx);
             assert!(result.is_err());
             match result {
                 Err(EngineError::InvalidTransaction { message }) => {
-                    assert_eq!(message, "Transaction not found");
+                    assert_eq!(message, "Referenced transaction does not exist");
                 }
                 _ => panic!("Expected InvalidTransaction error"),
             }
@@ -373,13 +394,13 @@ mod tests {
         fn test_chargeback_nonexistent_transaction() {
             let mut engine = Engine::new();
 
-            let chargeback_tx = Transaction::new_chargeback(1, 1, 999); // Non-existent transaction
+            let chargeback_tx = Transaction::new_chargeback(1, 999); // Non-existent transaction
 
             let result = engine.apply_transaction(chargeback_tx);
             assert!(result.is_err());
             match result {
                 Err(EngineError::InvalidTransaction { message }) => {
-                    assert_eq!(message, "Transaction not found");
+                    assert_eq!(message, "Referenced transaction does not exist");
                 }
                 _ => panic!("Expected InvalidTransaction error"),
             }
@@ -424,8 +445,6 @@ mod tests {
 
         #[test]
         fn test_negative_deposit() {
-            let mut engine = Engine::new();
-
             // This should panic due to validation in constructor
             let result = std::panic::catch_unwind(|| {
                 Transaction::new_deposit(1, 1, Decimal::from(-50));
@@ -435,8 +454,6 @@ mod tests {
 
         #[test]
         fn test_zero_deposit() {
-            let mut engine = Engine::new();
-
             // This should panic due to validation in constructor
             let result = std::panic::catch_unwind(|| {
                 Transaction::new_deposit(1, 1, Decimal::ZERO);
@@ -449,7 +466,52 @@ mod tests {
             let mut engine = Engine::new();
 
             // 1. Deposit money
-            let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(1000));
+            let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(1500));
+            assert!(engine.apply_transaction(deposit_tx).is_ok());
+
+            // 2. Withdraw some money
+            let withdraw_tx = Transaction::new_withdrawal(1, 2, Decimal::from(300));
+            assert!(engine.apply_transaction(withdraw_tx).is_ok());
+
+            // 3. Deposit money
+            let deposit_tx = Transaction::new_deposit(1, 3, Decimal::from(500));
+            assert!(engine.apply_transaction(deposit_tx).is_ok());
+
+            // 4. Dispute the withdrawal
+            let dispute_tx = Transaction::new_dispute(1, 1);
+            assert!(engine.apply_transaction(dispute_tx).is_ok());
+
+            // Verify dispute state
+            let account = engine.accounts.get(&1).unwrap();
+            assert_eq!(account.available, Decimal::from(200));
+            assert_eq!(account.held, Decimal::from(1500));
+            assert_eq!(account.total, Decimal::from(1700));
+            assert!(!account.locked);
+
+            // 5. Resolve the dispute
+            let resolve_tx = Transaction::new_resolve(1, 1);
+            assert!(engine.apply_transaction(resolve_tx).is_ok());
+
+            // Verify final state
+            let account = engine.accounts.get(&1).unwrap();
+            assert_eq!(account.available, Decimal::from(1700));
+            assert_eq!(account.held, Decimal::ZERO);
+            assert_eq!(account.total, Decimal::from(1700));
+            assert!(!account.locked);
+
+            // Verify all transactions were stored
+            assert_eq!(engine.transactions.len(), 3);
+            assert!(engine.transactions.contains_key(&1));
+            assert!(engine.transactions.contains_key(&2));
+            assert!(engine.transactions.contains_key(&3));
+        }
+
+        #[test]
+        fn test_dispute_withdrawal() {
+            let mut engine = Engine::new();
+
+            // 1. Deposit money
+            let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(1500));
             assert!(engine.apply_transaction(deposit_tx).is_ok());
 
             // 2. Withdraw some money
@@ -457,26 +519,100 @@ mod tests {
             assert!(engine.apply_transaction(withdraw_tx).is_ok());
 
             // 3. Dispute the withdrawal
-            let dispute_tx = Transaction::new_dispute(1, 3, 2);
+            let dispute_tx = Transaction::new_dispute(1, 2);
+            assert!(engine.apply_transaction(dispute_tx).is_err());
+
+            // Verify final state
+            let account = engine.accounts.get(&1).unwrap();
+            assert_eq!(account.available, Decimal::from(1200));
+            assert_eq!(account.held, Decimal::ZERO);
+            assert_eq!(account.total, Decimal::from(1200));
+            assert!(!account.locked);
+
+            // Verify all transactions were stored
+            assert_eq!(engine.transactions.len(), 2);
+            assert!(engine.transactions.contains_key(&1));
+            assert!(engine.transactions.contains_key(&2));
+        }
+
+        #[test]
+        fn test_resolve_dispute_post_withdrawal() {
+            let mut engine = Engine::new();
+
+            // 1. Deposit money
+            let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(500));
+            assert!(engine.apply_transaction(deposit_tx).is_ok());
+
+            // 2. Withdraw some money
+            let withdraw_tx = Transaction::new_withdrawal(1, 2, Decimal::from(250));
+            assert!(engine.apply_transaction(withdraw_tx).is_ok());
+
+            // 3. Dispute the withdrawal
+            let dispute_tx = Transaction::new_dispute(1, 1);
             assert!(engine.apply_transaction(dispute_tx).is_ok());
 
+            // Verify dispute state
+            let account = engine.accounts.get(&1).unwrap();
+            assert_eq!(account.available, Decimal::ZERO);
+            assert_eq!(account.held, Decimal::from(250));
+            assert_eq!(account.total, Decimal::from(250));
+            assert!(!account.locked);
+
             // 4. Resolve the dispute
-            let resolve_tx = Transaction::new_resolve(1, 4, 2);
+            let resolve_tx = Transaction::new_resolve(1, 1);
             assert!(engine.apply_transaction(resolve_tx).is_ok());
 
             // Verify final state
             let account = engine.accounts.get(&1).unwrap();
-            assert_eq!(account.available, Decimal::from(700));
+            assert_eq!(account.available, Decimal::from(250));
             assert_eq!(account.held, Decimal::ZERO);
-            assert_eq!(account.total, Decimal::from(700));
+            assert_eq!(account.total, Decimal::from(250));
             assert!(!account.locked);
 
             // Verify all transactions were stored
-            assert_eq!(engine.transactions.len(), 4);
+            assert_eq!(engine.transactions.len(), 2);
             assert!(engine.transactions.contains_key(&1));
             assert!(engine.transactions.contains_key(&2));
-            assert!(engine.transactions.contains_key(&3));
-            assert!(engine.transactions.contains_key(&4));
+        }
+
+        #[test]
+        fn test_chargeback_dispute_post_withdrawal() {
+            let mut engine = Engine::new();
+
+            // 1. Deposit money
+            let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(500));
+            assert!(engine.apply_transaction(deposit_tx).is_ok());
+
+            // 2. Withdraw some money
+            let withdraw_tx = Transaction::new_withdrawal(1, 2, Decimal::from(250));
+            assert!(engine.apply_transaction(withdraw_tx).is_ok());
+
+            // 3. Dispute the withdrawal
+            let dispute_tx = Transaction::new_dispute(1, 1);
+            assert!(engine.apply_transaction(dispute_tx).is_ok());
+
+            // Verify dispute state
+            let account = engine.accounts.get(&1).unwrap();
+            assert_eq!(account.available, Decimal::ZERO);
+            assert_eq!(account.held, Decimal::from(250));
+            assert_eq!(account.total, Decimal::from(250));
+            assert!(!account.locked);
+
+            // 4. Chargeback the dispute
+            let chargeback_tx = Transaction::new_chargeback(1, 1);
+            assert!(engine.apply_transaction(chargeback_tx).is_ok());
+
+            // Verify final state
+            let account = engine.accounts.get(&1).unwrap();
+            assert_eq!(account.available, Decimal::ZERO);
+            assert_eq!(account.held, Decimal::ZERO);
+            assert_eq!(account.total, Decimal::ZERO);
+            assert!(account.locked);
+
+            // Verify all transactions were stored
+            assert_eq!(engine.transactions.len(), 2);
+            assert!(engine.transactions.contains_key(&1));
+            assert!(engine.transactions.contains_key(&2));
         }
 
         #[test]
@@ -497,7 +633,7 @@ mod tests {
             assert!(deposit.is_valid());
             assert_eq!(deposit.amount, Some(Decimal::from(100)));
 
-            let dispute = Transaction::new_dispute(1, 1, 1);
+            let dispute = Transaction::new_dispute(1, 1);
             assert!(dispute.is_valid());
             assert_eq!(dispute.amount, None);
         }
@@ -517,8 +653,12 @@ mod tests {
             let mut buf = Vec::new();
             engine.dump_accounts(&mut buf);
             let output = String::from_utf8(buf).unwrap();
-            assert!(output.contains("Client: 1, Available: 100"));
-            assert!(output.contains("Client: 2, Available: 200"));
+
+            // Check CSV header
+            assert!(output.contains("client,available,held,total,locked"));
+            // Check CSV data
+            assert!(output.contains("1,100,0,100,false"));
+            assert!(output.contains("2,200,0,200,false"));
         }
 
         #[test]
@@ -527,13 +667,17 @@ mod tests {
             use rust_decimal::Decimal;
 
             let mut engine = Engine::new();
-            let tx = Transaction::new_deposit(1, 1, Decimal::from(42));
+            let tx = Transaction::new_deposit(1, 1, Decimal::from_str("42.0001").unwrap());
             engine.apply_transaction(tx).unwrap();
 
             let mut buf = Vec::new();
             engine.dump_accounts(&mut buf);
             let output = String::from_utf8(buf).unwrap();
-            assert!(output.contains("Client: 1, Available: 42"));
+
+            // Check CSV header
+            assert!(output.contains("client,available,held,total,locked"));
+            // Check CSV data
+            assert!(output.contains("1,42.0001,0,42.0001,false"));
         }
 
         #[test]
@@ -551,8 +695,12 @@ mod tests {
             engine.dump_accounts(&mut buf);
             let output = String::from_utf8(buf).unwrap();
 
+            // Check CSV header
+            assert!(output.contains("client,available,held,total,locked"));
+
+            // Check CSV data for each account
             for i in 1..=20 {
-                let expected = format!("Client: {}, Available: {}", i, i * 10);
+                let expected = format!("{},{},0,{},false", i, i * 10, i * 10);
                 assert!(output.contains(&expected), "Missing: {}", expected);
             }
         }

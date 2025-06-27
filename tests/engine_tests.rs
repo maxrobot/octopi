@@ -1,7 +1,8 @@
-use crate::engine::account::Account;
-use crate::engine::engine::{chargeback, deposit, dispute, resolve, withdraw};
-use crate::engine::transaction::Transaction;
-use crate::error::EngineError;
+use octopi::engine::account::Account;
+use octopi::engine::engine::{chargeback, deposit, dispute, resolve, withdraw};
+use octopi::engine::transaction::Transaction;
+use octopi::error::EngineError;
+
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -301,13 +302,10 @@ mod dispute_tests {
 
         let result = dispute(&mut account, &tx);
 
-        assert!(result.is_err());
-        match result {
-            Err(EngineError::InvalidTransaction { message }) => {
-                assert_eq!(message, "Insufficient funds");
-            }
-            _ => panic!("Expected InvalidTransaction error"),
-        }
+        assert!(result.is_ok());
+        assert_eq!(account.available, Decimal::ZERO);
+        assert_eq!(account.held, Decimal::from(25));
+        assert_eq!(account.total, Decimal::from(25));
     }
 
     #[test]
@@ -316,7 +314,7 @@ mod dispute_tests {
         account.available = Decimal::from(100);
         account.total = Decimal::from(100);
 
-        let tx = Transaction::new_dispute(1, 1, 1);
+        let tx = Transaction::new_dispute(1, 1);
 
         let result = dispute(&mut account, &tx);
 
@@ -358,7 +356,7 @@ mod resolve_tests {
         account.held = Decimal::from(50);
         account.total = Decimal::from(100);
 
-        let tx = Transaction::new_resolve(1, 1, 1);
+        let tx = Transaction::new_resolve(1, 1);
 
         let result = resolve(&mut account, &tx);
 
@@ -401,7 +399,7 @@ mod chargeback_tests {
         account.held = Decimal::from(50);
         account.total = Decimal::from(100);
 
-        let tx = Transaction::new_chargeback(1, 1, 1);
+        let tx = Transaction::new_chargeback(1, 1);
 
         let result = chargeback(&mut account, &tx);
 
