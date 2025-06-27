@@ -24,10 +24,6 @@ Then in your terminal run:
 cargo run -- transactions.csv > accounts.csv
 ```
 
-## General Design
-
-- Producer-Consumer Model
-
 ## Assumptions
 
 1. A withdrawal cannot be disputed
