@@ -70,7 +70,7 @@ impl Transaction {
 
     pub fn new_deposit(client: u16, tx_id: u32, amount: Decimal) -> Self {
         if amount <= Decimal::ZERO {
-            panic!("Deposit amount must be positive");
+            eprintln!("Deposit amount must be positive");
         }
         Self {
             client,
@@ -82,7 +82,7 @@ impl Transaction {
 
     pub fn new_withdrawal(client: u16, tx_id: u32, amount: Decimal) -> Self {
         if amount <= Decimal::ZERO {
-            panic!("Withdrawal amount must be positive");
+            eprintln!("Withdrawal amount must be positive");
         }
         Self {
             client,

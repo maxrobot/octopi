@@ -320,10 +320,10 @@ mod dispute_tests {
 
         assert!(result.is_err());
         match result {
-            Err(EngineError::InvalidTransaction { message }) => {
-                assert_eq!(message, "Transaction has no amount");
+            Err(EngineError::ZeroAmount(tx_id)) => {
+                assert_eq!(tx_id, 1);
             }
-            _ => panic!("Expected InvalidTransaction error"),
+            _ => panic!("Expected ZeroAmount error"),
         }
     }
 }
@@ -362,10 +362,10 @@ mod resolve_tests {
 
         assert!(result.is_err());
         match result {
-            Err(EngineError::InvalidTransaction { message }) => {
-                assert_eq!(message, "Transaction has no amount");
+            Err(EngineError::ZeroAmount(tx_id)) => {
+                assert_eq!(tx_id, 1);
             }
-            _ => panic!("Expected InvalidTransaction error"),
+            _ => panic!("Expected ZeroAmount error"),
         }
     }
 }
@@ -405,10 +405,10 @@ mod chargeback_tests {
 
         assert!(result.is_err());
         match result {
-            Err(EngineError::InvalidTransaction { message }) => {
-                assert_eq!(message, "Transaction has no amount");
+            Err(EngineError::ZeroAmount(tx_id)) => {
+                assert_eq!(tx_id, 1);
             }
-            _ => panic!("Expected InvalidTransaction error"),
+            _ => panic!("Expected ZeroAmount error"),
         }
     }
 

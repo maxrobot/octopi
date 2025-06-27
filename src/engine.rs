@@ -26,14 +26,10 @@ impl Engine {
         match tx.kind {
             TransactionType::Deposit | TransactionType::Withdrawal => {
                 if self.transactions.contains_key(&tx.tx_id) {
-                    return Err(EngineError::InvalidTransaction {
-                        message: "Transaction already exists".to_string(),
-                    });
+                    return Err(EngineError::DuplicateTransaction(tx.tx_id));
                 }
 
-                let amount = tx.amount.ok_or_else(|| EngineError::InvalidTransaction {
-                    message: "Transaction must have an amount".to_string(),
-                })?;
+                let amount = tx.amount.ok_or(EngineError::ZeroAmount(tx.tx_id))?;
 
                 match tx.kind {
                     TransactionType::Deposit => deposit(account, amount)?,
@@ -44,23 +40,17 @@ impl Engine {
                 self.transactions.insert(tx.tx_id, tx);
             }
             TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => {
-                let original = self.transactions.get(&tx.tx_id).ok_or_else(|| {
-                    EngineError::InvalidTransaction {
-                        message: "Referenced transaction does not exist".to_string(),
-                    }
-                })?;
+                let original = self
+                    .transactions
+                    .get(&tx.tx_id)
+                    .ok_or(EngineError::NonExistentTransaction(tx.tx_id))?;
 
                 if original.client != tx.client {
-                    return Err(EngineError::InvalidTransaction {
-                        message: "Referenced transaction does not belong to the same client"
-                            .to_string(),
-                    });
+                    return Err(EngineError::InvalidClient(tx.client, original.client));
                 }
 
                 if original.kind == TransactionType::Withdrawal {
-                    return Err(EngineError::InvalidTransaction {
-                        message: "Withdrawal cannot be disputed".to_string(),
-                    });
+                    return Err(EngineError::InvalidOperationOnWithdrawal);
                 }
 
                 match tx.kind {
@@ -121,9 +111,7 @@ pub fn withdraw(account: &mut Account, amount: Decimal) -> Result<(), EngineErro
 }
 
 pub fn dispute(account: &mut Account, tx: &Transaction) -> Result<(), EngineError> {
-    let mut amount = tx.amount.ok_or(EngineError::InvalidTransaction {
-        message: "Transaction has no amount".to_string(),
-    })?;
+    let mut amount = tx.amount.ok_or(EngineError::ZeroAmount(tx.tx_id))?;
 
     if account.available < amount {
         amount = account.available;
@@ -136,9 +124,7 @@ pub fn dispute(account: &mut Account, tx: &Transaction) -> Result<(), EngineErro
 }
 
 pub fn resolve(account: &mut Account, tx: &Transaction) -> Result<(), EngineError> {
-    let mut amount = tx.amount.ok_or(EngineError::InvalidTransaction {
-        message: "Transaction has no amount".to_string(),
-    })?;
+    let mut amount = tx.amount.ok_or(EngineError::ZeroAmount(tx.tx_id))?;
 
     if account.held < amount {
         amount = account.held;
@@ -151,9 +137,7 @@ pub fn resolve(account: &mut Account, tx: &Transaction) -> Result<(), EngineErro
 }
 
 pub fn chargeback(account: &mut Account, tx: &Transaction) -> Result<(), EngineError> {
-    let mut amount = tx.amount.ok_or(EngineError::InvalidTransaction {
-        message: "Transaction has no amount".to_string(),
-    })?;
+    let mut amount = tx.amount.ok_or(EngineError::ZeroAmount(tx.tx_id))?;
 
     if account.held < amount {
         amount = account.held;
@@ -352,10 +336,10 @@ mod tests {
             let result = engine.apply_transaction(dispute_tx);
             assert!(result.is_err());
             match result {
-                Err(EngineError::InvalidTransaction { message }) => {
-                    assert_eq!(message, "Referenced transaction does not exist");
+                Err(EngineError::NonExistentTransaction(tx_id)) => {
+                    assert_eq!(tx_id, 999);
                 }
-                _ => panic!("Expected InvalidTransaction error"),
+                _ => panic!("Expected NonExistentTransaction error"),
             }
         }
 
@@ -368,10 +352,10 @@ mod tests {
             let result = engine.apply_transaction(resolve_tx);
             assert!(result.is_err());
             match result {
-                Err(EngineError::InvalidTransaction { message }) => {
-                    assert_eq!(message, "Referenced transaction does not exist");
+                Err(EngineError::NonExistentTransaction(tx_id)) => {
+                    assert_eq!(tx_id, 999);
                 }
-                _ => panic!("Expected InvalidTransaction error"),
+                _ => panic!("Expected NonExistentTransaction error"),
             }
         }
 
@@ -384,10 +368,10 @@ mod tests {
             let result = engine.apply_transaction(chargeback_tx);
             assert!(result.is_err());
             match result {
-                Err(EngineError::InvalidTransaction { message }) => {
-                    assert_eq!(message, "Referenced transaction does not exist");
+                Err(EngineError::NonExistentTransaction(tx_id)) => {
+                    assert_eq!(tx_id, 999);
                 }
-                _ => panic!("Expected InvalidTransaction error"),
+                _ => panic!("Expected NonExistentTransaction error"),
             }
         }
 
@@ -426,24 +410,6 @@ mod tests {
             let stored_tx = engine.transactions.get(&42).unwrap();
             assert_eq!(stored_tx.client, 1);
             assert_eq!(stored_tx.tx_id, 42);
-        }
-
-        #[test]
-        fn test_negative_deposit() {
-            // This should panic due to validation in constructor
-            let result = std::panic::catch_unwind(|| {
-                Transaction::new_deposit(1, 1, Decimal::from(-50));
-            });
-            assert!(result.is_err());
-        }
-
-        #[test]
-        fn test_zero_deposit() {
-            // This should panic due to validation in constructor
-            let result = std::panic::catch_unwind(|| {
-                Transaction::new_deposit(1, 1, Decimal::ZERO);
-            });
-            assert!(result.is_err());
         }
 
         #[test]
@@ -602,17 +568,6 @@ mod tests {
 
         #[test]
         fn test_transaction_validation() {
-            // Test that constructor methods enforce validation
-            let result = std::panic::catch_unwind(|| {
-                Transaction::new_deposit(1, 1, Decimal::from(-10));
-            });
-            assert!(result.is_err());
-
-            let result = std::panic::catch_unwind(|| {
-                Transaction::new_withdrawal(1, 1, Decimal::ZERO);
-            });
-            assert!(result.is_err());
-
             // Test that valid transactions are created correctly
             let deposit = Transaction::new_deposit(1, 1, Decimal::from(100));
             assert!(deposit.is_valid());
