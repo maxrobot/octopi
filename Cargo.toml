@@ -3,6 +3,9 @@ edition = "2021"
 name    = "octopi"
 version = "0.1.0"
 
+[profile.release]
+overflow-checks = false
+
 [dependencies]
 anyhow       = "1.0.98"
 csv          = "1.3"

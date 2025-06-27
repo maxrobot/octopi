@@ -14,41 +14,33 @@ pub struct Engine {
 
 impl Engine {
     pub fn apply_transaction(&mut self, tx: Transaction) -> Result<(), EngineError> {
-        // Retrieve the account else create it
-        let entry = self
+        let account = self
             .accounts
             .entry(tx.client)
             .or_insert(Account::new(tx.client));
 
-        let tx_already_exists = self.transactions.contains_key(&tx.tx_id);
-
-        if !entry.is_available() {
+        if !account.is_available() {
             return Err(EngineError::AccountLocked(tx.client));
         }
 
         match tx.kind {
-            TransactionType::Deposit => {
-                if tx_already_exists {
+            TransactionType::Deposit | TransactionType::Withdrawal => {
+                if self.transactions.contains_key(&tx.tx_id) {
                     return Err(EngineError::InvalidTransaction {
                         message: "Transaction already exists".to_string(),
                     });
                 }
+
                 let amount = tx.amount.ok_or_else(|| EngineError::InvalidTransaction {
-                    message: "Deposit must have an amount".to_string(),
+                    message: "Transaction must have an amount".to_string(),
                 })?;
-                deposit(entry, amount)?;
-                self.transactions.insert(tx.tx_id, tx);
-            }
-            TransactionType::Withdrawal => {
-                if tx_already_exists {
-                    return Err(EngineError::InvalidTransaction {
-                        message: "Transaction already exists".to_string(),
-                    });
+
+                match tx.kind {
+                    TransactionType::Deposit => deposit(account, amount)?,
+                    TransactionType::Withdrawal => withdraw(account, amount)?,
+                    _ => unreachable!(),
                 }
-                let amount = tx.amount.ok_or_else(|| EngineError::InvalidTransaction {
-                    message: "Withdrawal must have an amount".to_string(),
-                })?;
-                withdraw(entry, amount)?;
+
                 self.transactions.insert(tx.tx_id, tx);
             }
             TransactionType::Dispute | TransactionType::Resolve | TransactionType::Chargeback => {
@@ -72,9 +64,9 @@ impl Engine {
                 }
 
                 match tx.kind {
-                    TransactionType::Dispute => dispute(entry, original)?,
-                    TransactionType::Resolve => resolve(entry, original)?,
-                    TransactionType::Chargeback => chargeback(entry, original)?,
+                    TransactionType::Dispute => dispute(account, original)?,
+                    TransactionType::Resolve => resolve(account, original)?,
+                    TransactionType::Chargeback => chargeback(account, original)?,
                     _ => unreachable!(),
                 }
             }
@@ -103,7 +95,6 @@ impl Engine {
 }
 
 pub fn deposit(account: &mut Account, amount: Decimal) -> Result<(), EngineError> {
-    // TODO: check this doesn't overflow
     account.available += amount;
     account.total += amount;
 
