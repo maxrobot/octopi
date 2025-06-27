@@ -1,10 +1,5 @@
-mod engine;
-mod error;
-
-use octopi::{
-    engine::{engine::Engine, transaction::Transaction},
-    stream_transactions,
-};
+use octopi::stream_transactions;
+use octopi::{engine::Engine, transaction::Transaction};
 
 use std::env;
 use std::error::Error;
@@ -12,9 +7,12 @@ use std::io::stdout;
 use std::path::Path;
 use tokio::sync::mpsc;
 
+const DEFAULT_CHANNEL_SIZE: usize = 100;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let csv_path = parse_args();
+
     validate_csv_file(&csv_path);
     process_transactions(&csv_path).await
 }
@@ -51,11 +49,11 @@ async fn process_transactions(csv_path: &str) -> Result<(), Box<dyn Error>> {
     // Create a channel to send transactions to the engine
     // NOTE: if we wanted to have multiple senders then we could clone the channel and
     // have many threads sending to the same recevier `rx`
-    let (tx_channel, mut rx) = mpsc::channel::<Transaction>(100);
+    let (tx_channel, mut rx) = mpsc::channel::<Transaction>(DEFAULT_CHANNEL_SIZE);
 
     // Spawn engine task
     let engine_handle = tokio::spawn(async move {
-        let mut engine = Engine::new();
+        let mut engine = Engine::default();
 
         while let Some(tx) = rx.recv().await {
             if let Err(e) = engine.apply_transaction(tx) {

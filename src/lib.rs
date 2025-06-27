@@ -1,14 +1,15 @@
+pub mod account;
 pub mod engine;
 pub mod error;
+pub mod transaction;
 
-use crate::engine::transaction::CsvTransaction;
+use crate::transaction::CsvTransaction;
 use csv::ReaderBuilder;
-use std::error::Error;
 use std::fs::File;
 
 pub fn stream_transactions(
     path: &str,
-) -> Result<impl Iterator<Item = CsvTransaction>, Box<dyn Error>> {
+) -> Result<impl Iterator<Item = CsvTransaction>, Box<dyn std::error::Error>> {
     let file = File::open(path)?;
     let rdr = ReaderBuilder::new().trim(csv::Trim::All).from_reader(file);
 

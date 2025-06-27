@@ -1,24 +1,18 @@
-use crate::engine::account::Account;
-use crate::engine::transaction::{Transaction, TransactionType};
+use crate::account::Account;
 use crate::error::EngineError;
+use crate::transaction::{Transaction, TransactionType};
 
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::io::Write;
 
+#[derive(Default)]
 pub struct Engine {
     accounts: HashMap<u16, Account>,
     transactions: HashMap<u32, Transaction>,
 }
 
 impl Engine {
-    pub fn new() -> Self {
-        Self {
-            accounts: HashMap::new(),
-            transactions: HashMap::new(),
-        }
-    }
-
     pub fn apply_transaction(&mut self, tx: Transaction) -> Result<(), EngineError> {
         // Retrieve the account else create it
         let entry = self
@@ -185,7 +179,7 @@ pub fn chargeback(account: &mut Account, tx: &Transaction) -> Result<(), EngineE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::transaction::Transaction;
+    use crate::transaction::Transaction;
     use std::str::FromStr;
 
     mod apply_transaction_tests {
@@ -193,7 +187,7 @@ mod tests {
 
         #[test]
         fn test_apply_deposit_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
             let tx = Transaction::new_deposit(1, 1, Decimal::from(100));
 
             assert!(engine.apply_transaction(tx).is_ok());
@@ -210,7 +204,7 @@ mod tests {
 
         #[test]
         fn test_apply_withdrawal_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // First deposit some money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(100));
@@ -229,7 +223,7 @@ mod tests {
 
         #[test]
         fn test_apply_withdrawal_insufficient_funds() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // Deposit some money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(50));
@@ -249,7 +243,7 @@ mod tests {
 
         #[test]
         fn test_apply_dispute_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // First deposit some money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(100));
@@ -268,7 +262,7 @@ mod tests {
 
         #[test]
         fn test_apply_resolve_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // First deposit some money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(100));
@@ -291,7 +285,7 @@ mod tests {
 
         #[test]
         fn test_apply_chargeback_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // First deposit some money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(100));
@@ -315,7 +309,7 @@ mod tests {
 
         #[test]
         fn test_duplicate_transaction_id() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             let tx1 = Transaction::new_deposit(1, 1, Decimal::from(100));
             assert!(engine.apply_transaction(tx1).is_ok());
@@ -333,7 +327,7 @@ mod tests {
 
         #[test]
         fn test_account_locked() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // First deposit and chargeback to lock the account
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(100));
@@ -360,7 +354,7 @@ mod tests {
 
         #[test]
         fn test_dispute_nonexistent_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             let dispute_tx = Transaction::new_dispute(1, 999); // Non-existent transaction
 
@@ -376,7 +370,7 @@ mod tests {
 
         #[test]
         fn test_resolve_nonexistent_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             let resolve_tx = Transaction::new_resolve(1, 999); // Non-existent transaction
 
@@ -392,7 +386,7 @@ mod tests {
 
         #[test]
         fn test_chargeback_nonexistent_transaction() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             let chargeback_tx = Transaction::new_chargeback(1, 999); // Non-existent transaction
 
@@ -408,7 +402,7 @@ mod tests {
 
         #[test]
         fn test_multiple_clients() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // Client 1 deposit
             let tx1 = Transaction::new_deposit(1, 1, Decimal::from(100));
@@ -430,7 +424,7 @@ mod tests {
 
         #[test]
         fn test_transaction_storage() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             let tx = Transaction::new_deposit(1, 42, Decimal::from(100));
 
@@ -463,7 +457,7 @@ mod tests {
 
         #[test]
         fn test_complex_workflow() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // 1. Deposit money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(1500));
@@ -508,7 +502,7 @@ mod tests {
 
         #[test]
         fn test_dispute_withdrawal() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // 1. Deposit money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(1500));
@@ -537,7 +531,7 @@ mod tests {
 
         #[test]
         fn test_resolve_dispute_post_withdrawal() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // 1. Deposit money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(500));
@@ -577,7 +571,7 @@ mod tests {
 
         #[test]
         fn test_chargeback_dispute_post_withdrawal() {
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
 
             // 1. Deposit money
             let deposit_tx = Transaction::new_deposit(1, 1, Decimal::from(500));
@@ -640,10 +634,10 @@ mod tests {
 
         #[test]
         fn test_dump_accounts_output() {
-            use crate::engine::transaction::Transaction;
+            use crate::transaction::Transaction;
             use rust_decimal::Decimal;
 
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
             let tx1 = Transaction::new_deposit(1, 1, Decimal::from(100));
             let tx2 = Transaction::new_deposit(2, 2, Decimal::from(200));
             engine.apply_transaction(tx1).unwrap();
@@ -663,10 +657,10 @@ mod tests {
 
         #[test]
         fn test_dump_accounts_short() {
-            use crate::engine::transaction::Transaction;
+            use crate::transaction::Transaction;
             use rust_decimal::Decimal;
 
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
             let tx = Transaction::new_deposit(1, 1, Decimal::from_str("42.0001").unwrap());
             engine.apply_transaction(tx).unwrap();
 
@@ -682,10 +676,10 @@ mod tests {
 
         #[test]
         fn test_dump_accounts_long() {
-            use crate::engine::transaction::Transaction;
+            use crate::transaction::Transaction;
             use rust_decimal::Decimal;
 
-            let mut engine = Engine::new();
+            let mut engine = Engine::default();
             for i in 1..=20 {
                 let tx = Transaction::new_deposit(i, i as u32, Decimal::from(i * 10));
                 engine.apply_transaction(tx).unwrap();
