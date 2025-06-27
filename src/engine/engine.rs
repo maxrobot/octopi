@@ -5,7 +5,6 @@ use crate::error::EngineError;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::io::Write;
-use std::str::FromStr;
 
 pub struct Engine {
     accounts: HashMap<u16, Account>,
@@ -187,6 +186,7 @@ pub fn chargeback(account: &mut Account, tx: &Transaction) -> Result<(), EngineE
 mod tests {
     use super::*;
     use crate::engine::transaction::Transaction;
+    use std::str::FromStr;
 
     mod apply_transaction_tests {
         use super::*;

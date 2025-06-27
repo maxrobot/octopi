@@ -46,14 +46,15 @@ fn validate_csv_file(path: &str) {
 }
 
 async fn process_transactions(csv_path: &str) -> Result<(), Box<dyn Error>> {
-    println!("Processing transactions from: {}", csv_path);
     let txs = stream_transactions(csv_path)?;
 
     // Create a channel to send transactions to the engine
+    // NOTE: if we wanted to have multiple senders then we could clone the channel and
+    // have many threads sending to the same recevier `rx`
     let (tx_channel, mut rx) = mpsc::channel::<Transaction>(100);
 
     // Spawn engine task
-    tokio::spawn(async move {
+    let engine_handle = tokio::spawn(async move {
         let mut engine = Engine::new();
 
         while let Some(tx) = rx.recv().await {
@@ -66,17 +67,22 @@ async fn process_transactions(csv_path: &str) -> Result<(), Box<dyn Error>> {
     });
 
     // Process CSV transactions
-    for tx_result in txs {
-        match tx_result {
-            Ok(tx) => {
-                let parsed_tx = tx.try_into()?;
+    for csv_tx in txs {
+        match csv_tx.try_into() {
+            Ok(parsed_tx) => {
                 tx_channel.send(parsed_tx).await.expect("Receiver dropped");
             }
             Err(e) => {
-                eprintln!("CSV parsing error: {}", e);
+                eprintln!("Transaction conversion error: {:?}", e);
             }
         }
     }
+
+    // Close the channel to signal the engine task to finish
+    drop(tx_channel);
+
+    // Wait for the engine task to complete
+    engine_handle.await?;
 
     Ok(())
 }

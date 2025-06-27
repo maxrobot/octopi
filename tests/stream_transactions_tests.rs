@@ -25,13 +25,13 @@ chargeback,1,5,1"#;
     assert_eq!(txs.len(), 5);
 
     // Check first transaction (deposit)
-    let first_tx = txs[0].as_ref().unwrap();
+    let first_tx = &txs[0];
     assert_eq!(first_tx.client, 1);
     assert_eq!(first_tx.tx, 1);
     assert_eq!(first_tx.amount, Some(Decimal::from_str("100.50").unwrap()));
 
     // Check second transaction (withdrawal)
-    let second_tx = txs[1].as_ref().unwrap();
+    let second_tx = &txs[1];
     assert_eq!(second_tx.client, 1);
     assert_eq!(second_tx.tx, 2);
     assert_eq!(second_tx.amount, Some(Decimal::from_str("50.25").unwrap()));
@@ -67,11 +67,11 @@ withdrawal,1,2,50.25"#;
     assert_eq!(txs.len(), 2);
 
     // First transaction should have None amount
-    let first_tx = txs[0].as_ref().unwrap();
+    let first_tx = &txs[0];
     assert_eq!(first_tx.amount, None);
 
     // Second transaction should have amount
-    let second_tx = txs[1].as_ref().unwrap();
+    let second_tx = &txs[1];
     assert_eq!(second_tx.amount, Some(Decimal::from_str("50.25").unwrap()));
 }
 
@@ -100,7 +100,7 @@ fn test_stream_transactions_large_file() {
     assert_eq!(txs.len(), 100);
 
     // Check a few specific transactions
-    let tx_50 = txs[49].as_ref().unwrap(); // 50th transaction (0-indexed)
+    let tx_50 = &txs[49]; // 50th transaction (0-indexed)
     assert_eq!(tx_50.client, 50);
     assert_eq!(tx_50.tx, 50);
     assert_eq!(tx_50.amount, Some(Decimal::from(500)));
@@ -128,13 +128,51 @@ withdrawal,2,7,75.25"#;
 
     // Check dispute transaction - should have None amount but at this point
     // we simply accept it
-    let dispute_tx = txs[2].as_ref().unwrap();
+    let dispute_tx = &txs[2];
     assert_eq!(dispute_tx.amount, Some(Decimal::from(1)));
 
     // Check withdrawal transaction (should have amount)
-    let withdrawal_tx = txs[1].as_ref().unwrap();
+    let withdrawal_tx = &txs[1];
     assert_eq!(
         withdrawal_tx.amount,
         Some(Decimal::from_str("25.50").unwrap())
     );
+}
+
+#[test]
+fn test_stream_transactions_with_invalid_lines() {
+    let temp_file = NamedTempFile::new().unwrap();
+    let csv_content = r#"type,client,tx,amount
+deposit,1,1,100.00
+invalid_line,should,be,skipped
+withdrawal,1,2,25.50
+deposit,2,3,1wds00.00
+dispute,1,4,1"#;
+
+    fs::write(&temp_file, csv_content).unwrap();
+
+    let txs: Vec<_> = stream_transactions(temp_file.path().to_str().unwrap())
+        .unwrap()
+        .collect();
+
+    // Should only have 3 valid transactions (deposit, withdrawal, dispute)
+    assert_eq!(txs.len(), 3);
+
+    // Check first transaction (deposit)
+    let first_tx = &txs[0];
+    assert_eq!(first_tx.client, 1);
+    assert_eq!(first_tx.tx, 1);
+    assert_eq!(first_tx.amount, Some(Decimal::from_str("100.00").unwrap()));
+
+    // Check second transaction (withdrawal)
+    let second_tx = &txs[1];
+    assert_eq!(second_tx.client, 1);
+    assert_eq!(second_tx.tx, 2);
+    assert_eq!(second_tx.amount, Some(Decimal::from_str("25.50").unwrap()));
+
+    // Check third transaction (dispute)
+    let third_tx = &txs[2];
+    assert_eq!(third_tx.client, 1);
+    assert_eq!(third_tx.tx, 4);
+    assert_eq!(third_tx.amount, Some(Decimal::from(1)));
 }
